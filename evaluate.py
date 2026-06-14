@@ -35,12 +35,13 @@ plt.rcParams["font.size"] = 12
 N_EPISODES = 200          # degerlendirme bolumu sayisi
 RESULTS_DIR = "results"
 PPO_PATH = os.path.join(RESULTS_DIR, "ppo_model.zip")
+DQN_PATH = os.path.join(RESULTS_DIR, "dqn_model.zip")
 
 
 # ----------------------------------------------------------------------
-# PPO modelini saran kucuk yardimci (act arayuzu baseline'larla ayni olsun)
+# SB3 modelini saran kucuk yardimci (act arayuzu baseline'larla ayni olsun)
 # ----------------------------------------------------------------------
-class PPOWrapper:
+class SB3Wrapper:
     def __init__(self, model):
         self.model = model
 
@@ -56,10 +57,16 @@ def load_agents(env):
     }
     if os.path.exists(PPO_PATH):
         from stable_baselines3 import PPO
-        agents["PPO"] = PPOWrapper(PPO.load(PPO_PATH))
+        agents["PPO"] = SB3Wrapper(PPO.load(PPO_PATH))
         print(f"PPO modeli yuklendi: {PPO_PATH}")
     else:
-        print("PPO modeli bulunamadi -> sadece baseline'lar degerlendiriliyor.")
+        print("PPO modeli bulunamadi.")
+    if os.path.exists(DQN_PATH):
+        from stable_baselines3 import DQN
+        agents["DQN"] = SB3Wrapper(DQN.load(DQN_PATH))
+        print(f"DQN modeli yuklendi: {DQN_PATH}")
+    else:
+        print("DQN modeli bulunamadi.")
     return agents
 
 
@@ -114,7 +121,8 @@ def main():
     print(f"\nTablo kaydedildi: {csv_path}")
 
     names = df["Ajan"].tolist()
-    colors = ["#9aa0a6", "#4285f4", "#34a853"][: len(names)]
+    palette = {"Rastgele": "#9aa0a6", "AHP": "#4285f4", "PPO": "#34a853", "DQN": "#c2410c"}
+    colors = [palette.get(n, "#999999") for n in names]
 
     # --- Grafik 1: ortalama odul ---
     fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -150,6 +158,60 @@ def main():
     fig.savefig(p2, dpi=200)
     plt.close(fig)
     print(f"Grafik kaydedildi: {p2}")
+
+    # --- Grafik 3: birlesik ogrenme egrisi (PPO vs DQN) ---
+    plot_combined_learning_curves()
+
+
+def _load_curve(candidate_dirs):
+    """Verilen aday klasorlerden ilk bulunan monitor logunu (x, y) olarak dondurur."""
+    from stable_baselines3.common.results_plotter import load_results, ts2xy
+    for d in candidate_dirs:
+        try:
+            if os.path.exists(d) and any(f.endswith(".monitor.csv") for f in os.listdir(d)):
+                x, y = ts2xy(load_results(d), "timesteps")
+                if len(y) > 0:
+                    return x, y
+        except Exception:
+            continue
+    return None, None
+
+
+def _smooth(values, window):
+    window = min(window, max(1, len(values) // 10))
+    w = np.ones(window) / window
+    return np.convolve(values, w, mode="valid"), window
+
+
+def plot_combined_learning_curves():
+    """PPO ve DQN ogrenme egrilerini ayni eksende cizer."""
+    px, py = _load_curve([os.path.join("logs", "ppo"), "logs"])
+    dx, dy = _load_curve([os.path.join("logs", "dqn")])
+    if py is None and dy is None:
+        print("Birlesik egri icin log bulunamadi (egitim loglari yok), atlandi.")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    if py is not None:
+        ys, w = _smooth(py, 50)
+        ax.plot(px[len(px) - len(ys):], ys, color="#1a73e8", linewidth=2,
+                label=f"PPO (hareketli ort. {w})")
+    if dy is not None:
+        ys, w = _smooth(dy, 50)
+        ax.plot(dx[len(dx) - len(ys):], ys, color="#c2410c", linewidth=2,
+                label=f"DQN (hareketli ort. {w})")
+    ax.axhline(3.6, color="#34a853", linestyle="--", linewidth=1.5,
+               label="AHP referansı (~3.6)")
+    ax.set_xlabel("Eğitim Adımı (timestep)")
+    ax.set_ylabel("Bölüm Ödülü")
+    ax.set_title("PPO ve DQN Öğrenme Eğrileri Karşılaştırması")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    p3 = os.path.join(RESULTS_DIR, "learning_curves_combined.png")
+    fig.savefig(p3, dpi=200)
+    plt.close(fig)
+    print(f"Grafik kaydedildi: {p3}")
 
 
 if __name__ == "__main__":
